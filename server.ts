@@ -26,6 +26,48 @@ function getGeminiClient() {
   });
 }
 
+function cleanAndParseJson(text: string) {
+  if (!text) return {};
+  let cleaned = text.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch (e) {
+        console.error("Failed to parse extracted JSON block:", e);
+      }
+    }
+    throw err;
+  }
+}
+
+async function generateGeminiContent(ai: GoogleGenAI, contents: string, config?: any) {
+  const modelsToTry = ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-1.5-flash"];
+  let lastErr: any = null;
+  for (const model of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        ...(config ? { config } : {}),
+      });
+      if (response && response.text) {
+        return response;
+      }
+    } catch (err) {
+      console.warn(`Model ${model} call failed, trying fallback model...`, err);
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("All Gemini AI models failed to respond.");
+}
+
 // 1. Generate LinkedIn Outreach Post
 app.post("/api/gen-post", async (req, res) => {
   try {
@@ -55,10 +97,7 @@ Output ONLY the post text, nothing else.
 JOB DESCRIPTION:
 ${jd}`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-    });
+    const response = await generateGeminiContent(ai, prompt);
 
     res.json({ post: response.text || "" });
   } catch (err: any) {
@@ -93,10 +132,7 @@ ${jobLocation ? `Location: ${jobLocation}` : ""}
 JOB DESCRIPTION:
 ${jd}`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-    });
+    const response = await generateGeminiContent(ai, prompt);
 
     res.json({ booleanStrings: response.text || "" });
   } catch (err: any) {
@@ -127,36 +163,30 @@ Filename reference: ${filename || "pasted"}
 RESUME TEXT:
 ${resumeText.slice(0, 8000)}`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            name: { type: Type.STRING },
-            title: { type: Type.STRING },
-            email: { type: Type.STRING },
-            phone: { type: Type.STRING },
-            skills: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            years_experience: { type: Type.STRING },
-            location: { type: Type.STRING },
-            visa_status_stated: { type: Type.STRING },
-            employment_type_stated: { type: Type.STRING },
-            summary: { type: Type.STRING },
+    const response = await generateGeminiContent(ai, prompt, {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          title: { type: Type.STRING },
+          email: { type: Type.STRING },
+          phone: { type: Type.STRING },
+          skills: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
           },
-          required: ["name", "title", "email", "phone", "skills", "summary"],
+          years_experience: { type: Type.STRING },
+          location: { type: Type.STRING },
+          visa_status_stated: { type: Type.STRING },
+          employment_type_stated: { type: Type.STRING },
+          summary: { type: Type.STRING },
         },
+        required: ["name", "title", "email", "phone", "skills", "summary"],
       },
     });
 
-    const text = response.text || "{}";
-    const parsed = JSON.parse(text);
-
+    const parsed = cleanAndParseJson(response.text || "{}");
     res.json(parsed);
   } catch (err: any) {
     console.error("Error in /api/parse-resume:", err);
@@ -171,6 +201,12 @@ app.post("/api/match-candidate", async (req, res) => {
     if (!jd || !candidate) {
       return res.status(400).json({ error: "Job description and candidate are required." });
     }
+
+    const skillsStr = Array.isArray(candidate.skills)
+      ? candidate.skills.join(", ")
+      : typeof candidate.skills === "string"
+      ? candidate.skills
+      : "";
 
     const ai = getGeminiClient();
     const prompt = `You are screening an IT candidate against a job description.
@@ -187,39 +223,35 @@ Title: ${candidate.title || ""}
 Location: ${candidate.location || ""}
 Stated Visa: ${candidate.visa_status_stated || "Not stated"}
 Stated Work Arrangement: ${candidate.employment_type_stated || "Not stated"}
-Skills: ${(candidate.skills || []).join(", ")}
+Skills: ${skillsStr}
 Summary: ${candidate.summary || ""}
 
 RESUME TEXT:
-${(candidate.resume_text || "").slice(0, 4000)}`;
+${(candidate.resume_text || candidate.resumeText || "").slice(0, 4000)}`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            score: { type: Type.NUMBER, description: "Match score from 0 to 100" },
-            rationale: { type: Type.STRING, description: "1-2 sentence match rationale" },
-            flags: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Key flags or risk factors",
-            },
-            keyMatches: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Key matching skills or strengths",
-            },
+    const response = await generateGeminiContent(ai, prompt, {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          score: { type: Type.NUMBER, description: "Match score from 0 to 100" },
+          rationale: { type: Type.STRING, description: "1-2 sentence match rationale" },
+          flags: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Key flags or risk factors",
           },
-          required: ["score", "rationale", "flags"],
+          keyMatches: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Key matching skills or strengths",
+          },
         },
+        required: ["score", "rationale", "flags"],
       },
     });
 
-    const parsed = JSON.parse(response.text || "{}");
+    const parsed = cleanAndParseJson(response.text || "{}");
     res.json(parsed);
   } catch (err: any) {
     console.error("Error in /api/match-candidate:", err);
@@ -245,31 +277,27 @@ ${jd.slice(0, 4000)}
 LINKEDIN PROFILE TEXT:
 ${profileText.slice(0, 4000)}`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            score: { type: Type.NUMBER },
-            rationale: { type: Type.STRING },
-            highlights: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            gaps: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
+    const response = await generateGeminiContent(ai, prompt, {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          score: { type: Type.NUMBER },
+          rationale: { type: Type.STRING },
+          highlights: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
           },
-          required: ["score", "rationale", "highlights", "gaps"],
+          gaps: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
         },
+        required: ["score", "rationale", "highlights", "gaps"],
       },
     });
 
-    res.json(JSON.parse(response.text || "{}"));
+    res.json(cleanAndParseJson(response.text || "{}"));
   } catch (err: any) {
     console.error("Error in /api/score-linkedin:", err);
     res.status(500).json({ error: err.message || "Failed to score LinkedIn profile." });
@@ -302,38 +330,34 @@ Analyze the requirement and return JSON:
 4. "inMailTemplate": A short, highly engaging, personalized LinkedIn InMail/Direct Message template (under 120 words) to send to sourced candidates. Do NOT include prohibited GC/USC restrictions. Use: "Must be authorized to work in the U.S. without employer sponsorship."
 5. "sourcingAdvice": A 1-2 sentence tip for sourcing this specific stack on LinkedIn.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            searchKeywords: { type: Type.STRING },
-            titleVariations: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            mustHaveSkills: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            inMailTemplate: { type: Type.STRING },
-            sourcingAdvice: { type: Type.STRING },
+    const response = await generateGeminiContent(ai, prompt, {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          searchKeywords: { type: Type.STRING },
+          titleVariations: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
           },
-          required: [
-            "searchKeywords",
-            "titleVariations",
-            "mustHaveSkills",
-            "inMailTemplate",
-            "sourcingAdvice",
-          ],
+          mustHaveSkills: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+          inMailTemplate: { type: Type.STRING },
+          sourcingAdvice: { type: Type.STRING },
         },
+        required: [
+          "searchKeywords",
+          "titleVariations",
+          "mustHaveSkills",
+          "inMailTemplate",
+          "sourcingAdvice",
+        ],
       },
     });
 
-    const parsed = JSON.parse(response.text || "{}");
+    const parsed = cleanAndParseJson(response.text || "{}");
 
     // Construct direct URLs
     const cleanKeywords = parsed.searchKeywords || jobTitle || "Java Developer";
