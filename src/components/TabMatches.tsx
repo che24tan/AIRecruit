@@ -11,6 +11,9 @@ import {
   AlertCircle,
   FileText,
   Target,
+  X,
+  Copy,
+  Check,
 } from "lucide-react";
 import { Candidate, JobDescription, MatchResult, LinkedInScoreResult } from "../types";
 
@@ -37,6 +40,10 @@ export const TabMatches: React.FC<TabMatchesProps> = ({
   const [isMatching, setIsMatching] = useState(false);
   const [matchStatus, setMatchStatus] = useState<{ text: string; error?: boolean } | null>(null);
   const [scoreFilter, setScoreFilter] = useState<number>(0);
+
+  // Resume Modal state
+  const [viewCandidateModal, setViewCandidateModal] = useState<Candidate | null>(null);
+  const [copiedResume, setCopiedResume] = useState(false);
 
   // LinkedIn Quick Score states
   const [linkedinText, setLinkedinText] = useState("");
@@ -370,17 +377,30 @@ export const TabMatches: React.FC<TabMatchesProps> = ({
                       </td>
 
                       <td className="py-3.5 px-3.5 text-right font-mono">
-                        {candidateObj?.email ? (
-                          <a
-                            href={`mailto:${candidateObj.email}`}
-                            className="inline-flex items-center gap-1.5 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 text-xs px-3 py-1.5 rounded-xl transition"
-                          >
-                            <Mail className="w-3.5 h-3.5" />
-                            <span>Contact</span>
-                          </a>
-                        ) : (
-                          <span className="text-slate-600">—</span>
-                        )}
+                        <div className="flex items-center justify-end gap-2">
+                          {candidateObj && (
+                            <button
+                              onClick={() => setViewCandidateModal(candidateObj)}
+                              className="inline-flex items-center gap-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs px-3 py-1.5 rounded-xl transition cursor-pointer"
+                              title="View full resume & candidate profile"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>View Resume</span>
+                            </button>
+                          )}
+                          {candidateObj?.email ? (
+                            <a
+                              href={`mailto:${candidateObj.email}`}
+                              className="inline-flex items-center gap-1.5 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 text-xs px-3 py-1.5 rounded-xl transition"
+                              title="Contact candidate via email"
+                            >
+                              <Mail className="w-3.5 h-3.5" />
+                              <span>Contact</span>
+                            </a>
+                          ) : (
+                            !candidateObj && <span className="text-slate-600">—</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -462,6 +482,148 @@ export const TabMatches: React.FC<TabMatchesProps> = ({
           </div>
         )}
       </div>
+
+      {/* View Resume Modal */}
+      {viewCandidateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="glass-card bg-[#0d1117] border border-[#233148] w-full max-w-3xl max-h-[88vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-[#233148] flex items-center justify-between bg-[#121824]">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-400">
+                  <UserCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-['Space_Grotesk'] text-base font-bold text-slate-100 flex items-center gap-2">
+                    {viewCandidateModal.name}
+                  </h3>
+                  <p className="text-slate-400 text-xs font-mono">
+                    {viewCandidateModal.title || "IT Professional"} · {viewCandidateModal.location || "Location Unstated"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {viewCandidateModal.email && (
+                  <a
+                    href={`mailto:${viewCandidateModal.email}`}
+                    className="inline-flex items-center gap-1.5 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 text-xs px-3 py-1.5 rounded-xl transition font-mono"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>Email Candidate</span>
+                  </a>
+                )}
+                <button
+                  onClick={() => setViewCandidateModal(null)}
+                  className="p-2 text-slate-400 hover:text-slate-200 hover:bg-[#1f293d] rounded-xl transition cursor-pointer"
+                  title="Close Modal"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-5 text-xs text-slate-300">
+              {/* Quick Details Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#121824]/60 p-4 rounded-xl border border-[#233148]/80 font-mono">
+                <div>
+                  <span className="text-slate-500 text-[10px] uppercase block font-semibold">Email</span>
+                  <span className="text-slate-200 truncate block">{viewCandidateModal.email || "N/A"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] uppercase block font-semibold">Phone</span>
+                  <span className="text-slate-200 truncate block">{viewCandidateModal.phone || "N/A"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] uppercase block font-semibold">Visa Status</span>
+                  <span className="text-amber-400 font-bold block">{viewCandidateModal.visa_status_stated || "Unstated"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] uppercase block font-semibold">Emp Type</span>
+                  <span className="text-slate-200 block">{viewCandidateModal.employment_type_stated || "Unstated"}</span>
+                </div>
+              </div>
+
+              {/* Skills */}
+              {viewCandidateModal.skills && viewCandidateModal.skills.length > 0 && (
+                <div>
+                  <span className="font-mono text-slate-400 text-[11px] font-bold uppercase tracking-wider block mb-2">
+                    Key Technical Skills ({viewCandidateModal.skills.length})
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {viewCandidateModal.skills.map((skill, idx) => (
+                      <span
+                        key={idx}
+                        className="bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs px-2.5 py-1 rounded-lg font-mono"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Summary */}
+              {viewCandidateModal.summary && (
+                <div>
+                  <span className="font-mono text-slate-400 text-[11px] font-bold uppercase tracking-wider block mb-1.5">
+                    Candidate Executive Summary
+                  </span>
+                  <p className="bg-[#121824] p-3.5 rounded-xl border border-[#233148] leading-relaxed text-slate-200">
+                    {viewCandidateModal.summary}
+                  </p>
+                </div>
+              )}
+
+              {/* Full Resume Content */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-mono text-slate-400 text-[11px] font-bold uppercase tracking-wider">
+                    Complete Resume Text ({viewCandidateModal.source || "Document"})
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(viewCandidateModal.resume_text || viewCandidateModal.summary || "");
+                      setCopiedResume(true);
+                      setTimeout(() => setCopiedResume(false), 2000);
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] font-mono text-amber-400 hover:text-amber-300 transition bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20 cursor-pointer"
+                  >
+                    {copiedResume ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span className="text-emerald-400">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        <span>Copy Resume Text</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div className="bg-[#090d14] p-4 rounded-xl border border-[#233148] max-h-72 overflow-y-auto font-mono text-[11px] text-slate-300 whitespace-pre-wrap leading-relaxed shadow-inner select-text">
+                  {viewCandidateModal.resume_text && viewCandidateModal.resume_text.trim()
+                    ? viewCandidateModal.resume_text
+                    : "No raw resume text available."}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-[#233148] bg-[#121824] flex items-center justify-end">
+              <button
+                onClick={() => setViewCandidateModal(null)}
+                className="bg-[#1e293b] hover:bg-[#2e3d55] text-slate-200 text-xs font-mono font-semibold px-4 py-2 rounded-xl border border-[#233148] transition cursor-pointer"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
