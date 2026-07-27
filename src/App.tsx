@@ -101,12 +101,12 @@ export default function App() {
     jobLocation?: string;
   } | null>(null);
 
-  // Sync to localStorage
+  // Sync to localStorage with quota overflow protection
   useEffect(() => {
     try {
       localStorage.setItem(LOCAL_STORAGE_JOBS, JSON.stringify(jobs));
     } catch (e) {
-      console.error(e);
+      console.error("Error saving jobs to localStorage", e);
     }
   }, [jobs]);
 
@@ -114,7 +114,17 @@ export default function App() {
     try {
       localStorage.setItem(LOCAL_STORAGE_CANDIDATES, JSON.stringify(candidates));
     } catch (e) {
-      console.error(e);
+      console.warn("localStorage quota exceeded, saving compressed candidate bank...", e);
+      try {
+        // Fallback: strip/trim raw resume text to fit within browser storage quota
+        const trimmedCandidates = candidates.map((c) => ({
+          ...c,
+          resume_text: c.resume_text ? c.resume_text.slice(0, 1500) : "",
+        }));
+        localStorage.setItem(LOCAL_STORAGE_CANDIDATES, JSON.stringify(trimmedCandidates));
+      } catch (err) {
+        console.error("Could not save candidates even after trimming resume text:", err);
+      }
     }
   }, [candidates]);
 

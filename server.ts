@@ -48,21 +48,28 @@ function cleanAndParseJson(text: string) {
 }
 
 async function generateGeminiContent(ai: GoogleGenAI, contents: string, config?: any) {
-  const modelsToTry = ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-1.5-flash"];
+  const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash"];
   let lastErr: any = null;
+
   for (const model of modelsToTry) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        ...(config ? { config } : {}),
-      });
-      if (response && response.text) {
-        return response;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents,
+          ...(config ? { config } : {}),
+        });
+        if (response && response.text) {
+          return response;
+        }
+      } catch (err: any) {
+        lastErr = err;
+        console.warn(`Model ${model} attempt ${attempt + 1} failed: ${err.message || err}`);
+        // Delay before retry if rate limited or transient error
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
       }
-    } catch (err) {
-      console.warn(`Model ${model} call failed, trying fallback model...`, err);
-      lastErr = err;
     }
   }
   throw lastErr || new Error("All Gemini AI models failed to respond.");

@@ -80,26 +80,30 @@ export const TabMatches: React.FC<TabMatchesProps> = ({
 
     setIsMatching(true);
     setMatchStatus({ text: `Initializing AI evaluation for ${candidates.length} candidate(s)...` });
+
     const newMatches: MatchResult[] = [];
+    const queue = [...candidates];
+    let completed = 0;
+    const total = candidates.length;
 
-    for (let i = 0; i < candidates.length; i++) {
-      const c = candidates[i];
-      setMatchStatus({ text: `Scoring ${i + 1}/${candidates.length}: ${c.name}...` });
-
+    const matchSingleCandidate = async (c: Candidate, attemptsLeft = 2): Promise<MatchResult> => {
       try {
         const res = await fetch("/api/match-candidate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             jd: activeJd.jdText,
-            candidate: c,
+            candidate: {
+              ...c,
+              resume_text: (c.resume_text || "").slice(0, 6000), // Trim text to keep payload light
+            },
           }),
         });
 
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Matching failed.");
 
-        newMatches.push({
+        return {
           id: "m_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
           candidateId: c.id,
           candidateName: c.name,
@@ -107,24 +111,57 @@ export const TabMatches: React.FC<TabMatchesProps> = ({
           rationale: data.rationale || "Evaluated fit.",
           flags: data.flags || [],
           keyMatches: data.keyMatches || [],
-        });
+        };
       } catch (err: any) {
+        if (attemptsLeft > 0) {
+          console.warn(`Retrying match for ${c.name} (${attemptsLeft} attempt(s) left)...`);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          return matchSingleCandidate(c, attemptsLeft - 1);
+        }
         console.error(`Error matching ${c.name}:`, err);
-        newMatches.push({
-          id: "m_err_" + Date.now(),
+        return {
+          id: "m_err_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
           candidateId: c.id,
           candidateName: c.name,
           score: 0,
-          rationale: "Scoring encountered an error.",
-          flags: ["Scoring failed"],
+          rationale: "AI evaluation timed out or returned invalid response.",
+          flags: ["Evaluation Error"],
+        };
+      }
+    };
+
+    // Run 3 concurrent evaluation workers
+    const concurrency = Math.min(3, queue.length);
+    const workers = Array.from({ length: concurrency }, async () => {
+      while (queue.length > 0) {
+        const candidate = queue.shift();
+        if (!candidate) break;
+
+        const result = await matchSingleCandidate(candidate);
+        newMatches.push(result);
+        completed++;
+
+        setMatchStatus({
+          text: `Scored ${completed}/${total} candidate(s)... (${result.candidateName}: ${result.score} pts)`,
         });
       }
-    }
+    });
+
+    await Promise.all(workers);
 
     newMatches.sort((a, b) => b.score - a.score);
     setMatches(newMatches);
     setIsMatching(false);
-    setMatchStatus({ text: `Scored ${candidates.length} candidate(s) successfully!` });
+
+    const errorCount = newMatches.filter((m) => m.flags?.includes("Evaluation Error")).length;
+    if (errorCount > 0) {
+      setMatchStatus({
+        text: `Completed with ${newMatches.length - errorCount} scored, ${errorCount} candidates hit temporary API timeouts.`,
+        error: true,
+      });
+    } else {
+      setMatchStatus({ text: `Scored all ${candidates.length} candidate(s) successfully!` });
+    }
   };
 
   // Quick Score LinkedIn Profile

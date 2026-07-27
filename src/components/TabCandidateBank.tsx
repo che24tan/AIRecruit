@@ -45,29 +45,75 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Handle file drop / upload
+  // Helper to process task queue with concurrency limit (e.g. 3 at a time)
+  const runConcurrentQueue = async (
+    tasks: { name: string; taskFn: () => Promise<boolean> }[],
+    concurrency: number,
+    onProgress: (completed: number, total: number, successes: number, failures: number, currentName: string) => void
+  ) => {
+    let completed = 0;
+    let successes = 0;
+    let failures = 0;
+    const total = tasks.length;
+
+    const queue = [...tasks];
+    const workers = Array.from({ length: Math.min(concurrency, total) }, async () => {
+      while (queue.length > 0) {
+        const item = queue.shift();
+        if (!item) break;
+        try {
+          const ok = await item.taskFn();
+          if (ok) successes++;
+          else failures++;
+        } catch (err) {
+          failures++;
+          console.error(`Error processing ${item.name}:`, err);
+        } finally {
+          completed++;
+          onProgress(completed, total, successes, failures, item.name);
+        }
+      }
+    });
+
+    await Promise.all(workers);
+    return { successes, failures };
+  };
+
+  // Handle file drop / upload with parallel batch processing
   const handleFileUpload = async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
     if (fileArray.length === 0) return;
 
     setIsParsing(true);
-    setParseStatus({ text: `Processing ${fileArray.length} resume file(s)...` });
+    setParseStatus({ text: `Extracting and parsing ${fileArray.length} resume file(s)...` });
 
-    for (let i = 0; i < fileArray.length; i++) {
-      const file = fileArray[i];
-      setParseStatus({ text: `Parsing ${i + 1}/${fileArray.length}: ${file.name}...` });
-
-      try {
+    const tasks = fileArray.map((file) => ({
+      name: file.name,
+      taskFn: async () => {
         const text = await extractTextFromFile(file);
-        await parseAndAddCandidate(text, file.name);
-      } catch (err: any) {
-        console.error("Error reading file:", err);
-        setParseStatus({ text: `Failed to read ${file.name}.`, error: true });
+        return await parseAndAddCandidate(text, file.name);
+      },
+    }));
+
+    const { successes, failures } = await runConcurrentQueue(
+      tasks,
+      3, // 3 parallel workers for fast processing without hitting rate limits
+      (completed, total, successes, failures, currentName) => {
+        setParseStatus({
+          text: `Parsing ${completed}/${total} (${successes} added${failures > 0 ? `, ${failures} failed` : ""}). Processing ${currentName}...`,
+        });
       }
-    }
+    );
 
     setIsParsing(false);
-    setParseStatus({ text: `Successfully added ${fileArray.length} resume(s) to candidate bank!` });
+    if (failures > 0) {
+      setParseStatus({
+        text: `Batch complete: ${successes} resume(s) successfully added, ${failures} file(s) failed or malformed.`,
+        error: failures === fileArray.length,
+      });
+    } else {
+      setParseStatus({ text: `Successfully added all ${successes} resume(s) to candidate bank!` });
+    }
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -86,23 +132,42 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
     setIsParsing(true);
     setParseStatus({ text: `Parsing ${chunks.length} candidate resume(s)...` });
 
-    for (let i = 0; i < chunks.length; i++) {
-      setParseStatus({ text: `AI Parsing ${i + 1}/${chunks.length}...` });
-      await parseAndAddCandidate(chunks[i], "Pasted Resume");
-    }
+    const tasks = chunks.map((chunk, idx) => ({
+      name: `Candidate #${idx + 1}`,
+      taskFn: async () => {
+        return await parseAndAddCandidate(chunk, `Pasted Resume #${idx + 1}`);
+      },
+    }));
+
+    const { successes, failures } = await runConcurrentQueue(
+      tasks,
+      3,
+      (completed, total, successes, failures, currentName) => {
+        setParseStatus({
+          text: `Parsing ${completed}/${total} candidate(s)... (${successes} added${failures > 0 ? `, ${failures} failed` : ""})`,
+        });
+      }
+    );
 
     setIsParsing(false);
     setPasteText("");
-    setParseStatus({ text: `Added ${chunks.length} candidate(s) to candidate bank.` });
+    if (failures > 0) {
+      setParseStatus({
+        text: `Parsed ${successes} candidate(s) successfully. ${failures} candidate chunk(s) failed.`,
+        error: failures === chunks.length,
+      });
+    } else {
+      setParseStatus({ text: `Successfully added ${successes} candidate(s) to candidate bank!` });
+    }
   };
 
-  const parseAndAddCandidate = async (text: string, sourceName: string) => {
+  const parseAndAddCandidate = async (text: string, sourceName: string): Promise<boolean> => {
     try {
       const res = await fetch("/api/parse-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          resumeText: text,
+          resumeText: text.slice(0, 12000), // Cap input text to prevent oversized payloads
           filename: sourceName,
         }),
       });
@@ -122,7 +187,7 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
         visa_status_stated: parsed.visa_status_stated || "",
         employment_type_stated: parsed.employment_type_stated || "",
         summary: parsed.summary || "",
-        resume_text: text,
+        resume_text: text.slice(0, 12000),
         source: sourceName,
         status: "New",
         notes: "",
@@ -130,8 +195,10 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
       };
 
       onAddCandidate(newCand);
+      return true;
     } catch (err) {
-      console.error("Parse error:", err);
+      console.error("Parse error for candidate:", err);
+      return false;
     }
   };
 
