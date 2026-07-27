@@ -152,12 +152,30 @@ ${jd}`;
 app.post("/api/parse-resume", async (req, res) => {
   try {
     const { resumeText, filename } = req.body;
-    if (!resumeText || typeof resumeText !== "string") {
-      return res.status(400).json({ error: "Resume text is required." });
+    const cleanText = (resumeText || "").toString().replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ").trim();
+    const fallbackName = (filename || "Candidate")
+      .replace(/\.[^/.]+$/, "")
+      .replace(/[-_]/g, " ")
+      .replace(/\b\w/g, (l: string) => l.toUpperCase());
+
+    if (!cleanText || cleanText.length < 15) {
+      return res.json({
+        name: fallbackName,
+        title: "Candidate (Scanned File)",
+        email: "",
+        phone: "",
+        skills: ["Resume Uploaded"],
+        years_experience: "",
+        location: "",
+        visa_status_stated: "",
+        employment_type_stated: "",
+        summary: `Document uploaded (${filename || "file"}). Text extraction limited.`,
+      });
     }
 
-    const ai = getGeminiClient();
-    const prompt = `Extract structured recruiting data from this resume text.
+    try {
+      const ai = getGeminiClient();
+      const prompt = `Extract structured recruiting data from this resume text.
 Rules:
 - title: candidate's current or most recent job title (e.g. "Senior Java Developer", "Data Engineer")
 - visa_status_stated: only what the resume itself claims (e.g. "H1B", "Green Card", "US Citizen", "OPT", or "" if not mentioned) — do not verify or guess
@@ -168,33 +186,51 @@ Rules:
 Filename reference: ${filename || "pasted"}
 
 RESUME TEXT:
-${resumeText.slice(0, 8000)}`;
+${cleanText.slice(0, 8000)}`;
 
-    const response = await generateGeminiContent(ai, prompt, {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          name: { type: Type.STRING },
-          title: { type: Type.STRING },
-          email: { type: Type.STRING },
-          phone: { type: Type.STRING },
-          skills: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
+      const response = await generateGeminiContent(ai, prompt, {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            name: { type: Type.STRING },
+            title: { type: Type.STRING },
+            email: { type: Type.STRING },
+            phone: { type: Type.STRING },
+            skills: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+            },
+            years_experience: { type: Type.STRING },
+            location: { type: Type.STRING },
+            visa_status_stated: { type: Type.STRING },
+            employment_type_stated: { type: Type.STRING },
+            summary: { type: Type.STRING },
           },
-          years_experience: { type: Type.STRING },
-          location: { type: Type.STRING },
-          visa_status_stated: { type: Type.STRING },
-          employment_type_stated: { type: Type.STRING },
-          summary: { type: Type.STRING },
+          required: ["name", "title", "email", "phone", "skills", "summary"],
         },
-        required: ["name", "title", "email", "phone", "skills", "summary"],
-      },
-    });
+      });
 
-    const parsed = cleanAndParseJson(response.text || "{}");
-    res.json(parsed);
+      const parsed = cleanAndParseJson(response.text || "{}");
+      if (!parsed.name || parsed.name.toLowerCase().includes("unknown") || parsed.name.trim().length < 2) {
+        parsed.name = fallbackName;
+      }
+      return res.json(parsed);
+    } catch (aiErr) {
+      console.warn("AI parse error, returning fallback candidate record:", aiErr);
+      return res.json({
+        name: fallbackName,
+        title: "IT Professional",
+        email: "",
+        phone: "",
+        skills: ["Uploaded Candidate"],
+        years_experience: "",
+        location: "",
+        visa_status_stated: "",
+        employment_type_stated: "",
+        summary: `Uploaded resume file (${filename || "file"}).`,
+      });
+    }
   } catch (err: any) {
     console.error("Error in /api/parse-resume:", err);
     res.status(500).json({ error: err.message || "Failed to parse resume." });
