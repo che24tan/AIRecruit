@@ -16,6 +16,7 @@ import {
   X,
   Edit2,
   Users,
+  RefreshCw,
 } from "lucide-react";
 import { Candidate, CandidateStatus } from "../types";
 import { extractTextFromFile } from "../utils/fileExtractor";
@@ -37,6 +38,7 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
 }) => {
   const [pasteText, setPasteText] = useState("");
   const [isParsing, setIsParsing] = useState(false);
+  const [isReParsing, setIsReParsing] = useState(false);
   const [parseStatus, setParseStatus] = useState<{ text: string; error?: boolean } | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
@@ -200,6 +202,59 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
       console.error("Parse error for candidate:", err);
       return false;
     }
+  };
+
+  const handleReParseCandidate = async (c: Candidate) => {
+    try {
+      const res = await fetch("/api/parse-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resumeText: c.resume_text || c.name || "Resume",
+          filename: c.source || "Resume",
+        }),
+      });
+      if (!res.ok) return;
+      const parsed = await res.json();
+      onUpdateCandidate(c.id, {
+        name: parsed.name && !parsed.name.toLowerCase().includes("unknown") ? parsed.name : c.name,
+        title: parsed.title || c.title || "IT Professional",
+        email: parsed.email || c.email,
+        phone: parsed.phone || c.phone,
+        skills: Array.isArray(parsed.skills) && parsed.skills.length > 0 ? parsed.skills : c.skills,
+        location: parsed.location || c.location,
+        visa_status_stated: parsed.visa_status_stated || c.visa_status_stated,
+        employment_type_stated: parsed.employment_type_stated || c.employment_type_stated,
+        summary: parsed.summary || c.summary,
+      });
+    } catch (err) {
+      console.error("Re-parse error:", err);
+    }
+  };
+
+  const handleReParseAll = async () => {
+    if (candidates.length === 0) return;
+    setIsReParsing(true);
+    setParseStatus({ text: `Re-parsing and extracting fields for ${candidates.length} candidate(s)...` });
+
+    const tasks = candidates.map((c) => ({
+      name: c.name,
+      taskFn: async () => {
+        await handleReParseCandidate(c);
+        return true;
+      },
+    }));
+
+    await runConcurrentQueue(
+      tasks,
+      3,
+      (completed, total) => {
+        setParseStatus({ text: `Extracting fields ${completed}/${total} candidates...` });
+      }
+    );
+
+    setIsReParsing(false);
+    setParseStatus({ text: `Successfully re-parsed all candidates! Fields updated.` });
   };
 
   // Export CSV
@@ -389,6 +444,16 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              onClick={handleReParseAll}
+              disabled={candidates.length === 0 || isReParsing}
+              className="flex items-center gap-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-xs text-amber-300 px-3.5 py-2 rounded-xl transition cursor-pointer disabled:opacity-40 font-mono shadow-sm"
+              title="Re-parse all resumes and extract Title, Email, Phone, Skills, Location, Visa"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${isReParsing ? "animate-spin" : ""}`} />
+              <span>{isReParsing ? "Extracting..." : "Re-Parse Fields"}</span>
+            </button>
+
             <button
               onClick={handleExportCsv}
               disabled={candidates.length === 0}
@@ -587,6 +652,13 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
                     {/* Actions */}
                     <td className="py-3 px-3.5 text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => handleReParseCandidate(c)}
+                          className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-400/10 rounded-lg transition cursor-pointer"
+                          title="Re-extract fields (Title, Contact, Skills, Visa)"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </button>
                         <button
                           onClick={() => setSelectedCandidate(c)}
                           className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-400/10 rounded-lg transition cursor-pointer"

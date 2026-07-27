@@ -148,6 +148,69 @@ ${jd}`;
   }
 });
 
+function extractHeuristicsFromText(text: string, filename: string) {
+  const clean = text || "";
+
+  // Email
+  const emailMatch = clean.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  const email = emailMatch ? emailMatch[0] : "";
+
+  // Phone
+  const phoneMatch = clean.match(/(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}/);
+  const phone = phoneMatch ? phoneMatch[0] : "";
+
+  // Visa Status
+  let visa = "";
+  if (/\b(us citizen|u\.s\. citizen|citizen)\b/i.test(clean)) visa = "US Citizen";
+  else if (/\b(green card|gc|permanent resident)\b/i.test(clean)) visa = "Green Card";
+  else if (/\b(h1b|h-1b)\b/i.test(clean)) visa = "H1B";
+  else if (/\b(opt|stem opt)\b/i.test(clean)) visa = "OPT";
+  else if (/\b(ead|h4 ead|l2 ead)\b/i.test(clean)) visa = "EAD";
+  else if (/\b(tn visa|tn)\b/i.test(clean)) visa = "TN Visa";
+
+  // Employment Type
+  let empType = "";
+  if (/\b(c2c|corp-to-corp|corp to corp)\b/i.test(clean)) empType = "C2C";
+  if (/\b(w2|w-2)\b/i.test(clean)) empType = empType ? "W2/C2C" : "W2";
+  if (/\b(fte|full time|full-time)\b/i.test(clean)) empType = empType ? `${empType}/FTE` : "FTE";
+
+  // Location (e.g., Dallas, TX or San Jose, CA or New York, NY)
+  const locMatch = clean.match(/\b([A-Z][a-zA-A\s]{2,15},\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY))\b/i);
+  const location = locMatch ? locMatch[0] : "";
+
+  // Common Tech Skills Dictionary
+  const commonSkills = [
+    "Java", "Spring Boot", "Python", "React", "Angular", "Node.js", "JavaScript", "TypeScript",
+    "C#", ".NET", "AWS", "Azure", "GCP", "SQL", "PostgreSQL", "Oracle", "MongoDB", "Kubernetes",
+    "Docker", "Microservices", "Kafka", "Spark", "Hadoop", "DevOps", "Terraform", "Jenkins",
+    "REST API", "GraphQL", "Snowflake", "Databricks", "Tableau", "Power BI", "Salesforce",
+    "MuleSoft", "Golang", "Scala", "C++", "Linux", "CI/CD", "Agile", "Scrum", "Selenium"
+  ];
+  const detectedSkills = commonSkills.filter((s) => new RegExp(`\\b${s.replace(".", "\\.")}\\b`, "i").test(clean));
+
+  // Job Title extraction heuristics
+  let title = "";
+  const titleRegex = /(Senior|Lead|Principal|Junior|Staff)?\s*(Java|Python|Full Stack|React|Frontend|Backend|Software|Data|DevOps|Cloud|QA|Automation|\.Net|Dotnet|Systems|Solution|Project|Product|AWS|Salesforce|SAP|MuleSoft|Database)\s*(Developer|Engineer|Architect|Lead|Manager|Consultant|Analyst|Admin|Administrator)/i;
+  const titleMatch = clean.match(titleRegex);
+  if (titleMatch) {
+    title = titleMatch[0];
+  }
+
+  // Name heuristic if needed
+  const lines = clean.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  let name = "";
+  for (const line of lines.slice(0, 5)) {
+    if (!line.includes("@") && !line.match(/\d{3}/) && line.length > 2 && line.length < 35) {
+      if (/^[A-Za-z\s.'-]+$/.test(line) && !/resume|curriculum|profile|summary|experience|education/i.test(line)) {
+        name = line;
+        break;
+      }
+    }
+  }
+
+  return { name, title, email, phone, location, visa, empType, skills: detectedSkills };
+}
+
 // 3. Parse Resume Text into Structured Candidate Record
 app.post("/api/parse-resume", async (req, res) => {
   try {
@@ -158,17 +221,19 @@ app.post("/api/parse-resume", async (req, res) => {
       .replace(/[-_]/g, " ")
       .replace(/\b\w/g, (l: string) => l.toUpperCase());
 
+    const heuristics = extractHeuristicsFromText(cleanText, filename || "");
+
     if (!cleanText || cleanText.length < 15) {
       return res.json({
-        name: fallbackName,
-        title: "Candidate (Scanned File)",
-        email: "",
-        phone: "",
-        skills: ["Resume Uploaded"],
+        name: heuristics.name || fallbackName,
+        title: heuristics.title || "IT Professional",
+        email: heuristics.email || "",
+        phone: heuristics.phone || "",
+        skills: heuristics.skills.length > 0 ? heuristics.skills : ["Resume Uploaded"],
         years_experience: "",
-        location: "",
-        visa_status_stated: "",
-        employment_type_stated: "",
+        location: heuristics.location || "",
+        visa_status_stated: heuristics.visa || "",
+        employment_type_stated: heuristics.empType || "",
         summary: `Document uploaded (${filename || "file"}). Text extraction limited.`,
       });
     }
@@ -177,11 +242,16 @@ app.post("/api/parse-resume", async (req, res) => {
       const ai = getGeminiClient();
       const prompt = `Extract structured recruiting data from this resume text.
 Rules:
+- name: Candidate's full name
 - title: candidate's current or most recent job title (e.g. "Senior Java Developer", "Data Engineer")
-- visa_status_stated: only what the resume itself claims (e.g. "H1B", "Green Card", "US Citizen", "OPT", or "" if not mentioned) — do not verify or guess
-- employment_type_stated: work arrangement stated, e.g. "C2C", "W2", "FTE", or combinations like "W2/C2C" — use "" if not mentioned
-- summary: one concise sentence summarizing their core experience
-- If a field is missing or not found, use an empty string or empty array.
+- email: email address
+- phone: phone number
+- skills: array of top 5-10 technical skills mentioned
+- location: City, State or Location if mentioned
+- visa_status_stated: visa/work authorization claimed on resume (e.g. "H1B", "Green Card", "US Citizen", "OPT", "TN", "EAD") or "" if unstated
+- employment_type_stated: preferred arrangement e.g. "C2C", "W2", "FTE", or ""
+- years_experience: total years experience estimate
+- summary: one concise sentence summarizing core expertise
 
 Filename reference: ${filename || "pasted"}
 
@@ -212,22 +282,40 @@ ${cleanText.slice(0, 8000)}`;
       });
 
       const parsed = cleanAndParseJson(response.text || "{}");
-      if (!parsed.name || parsed.name.toLowerCase().includes("unknown") || parsed.name.trim().length < 2) {
-        parsed.name = fallbackName;
-      }
-      return res.json(parsed);
+
+      // Merge AI result with heuristic extractions for guaranteed field completeness
+      const finalRecord = {
+        name: parsed.name && !parsed.name.toLowerCase().includes("unknown") && parsed.name.trim().length >= 2
+          ? parsed.name
+          : heuristics.name || fallbackName,
+        title: parsed.title || heuristics.title || "IT Professional",
+        email: parsed.email || heuristics.email || "",
+        phone: parsed.phone || heuristics.phone || "",
+        skills: Array.isArray(parsed.skills) && parsed.skills.length > 0
+          ? parsed.skills
+          : heuristics.skills.length > 0
+          ? heuristics.skills
+          : ["General IT"],
+        years_experience: parsed.years_experience || "",
+        location: parsed.location || heuristics.location || "",
+        visa_status_stated: parsed.visa_status_stated || heuristics.visa || "",
+        employment_type_stated: parsed.employment_type_stated || heuristics.empType || "",
+        summary: parsed.summary || `Candidate profile extracted from ${filename || "resume"}.`,
+      };
+
+      return res.json(finalRecord);
     } catch (aiErr) {
-      console.warn("AI parse error, returning fallback candidate record:", aiErr);
+      console.warn("AI parse error, using heuristic extractions:", aiErr);
       return res.json({
-        name: fallbackName,
-        title: "IT Professional",
-        email: "",
-        phone: "",
-        skills: ["Uploaded Candidate"],
+        name: heuristics.name || fallbackName,
+        title: heuristics.title || "IT Professional",
+        email: heuristics.email || "",
+        phone: heuristics.phone || "",
+        skills: heuristics.skills.length > 0 ? heuristics.skills : ["Uploaded Candidate"],
         years_experience: "",
-        location: "",
-        visa_status_stated: "",
-        employment_type_stated: "",
+        location: heuristics.location || "",
+        visa_status_stated: heuristics.visa || "",
+        employment_type_stated: heuristics.empType || "",
         summary: `Uploaded resume file (${filename || "file"}).`,
       });
     }
