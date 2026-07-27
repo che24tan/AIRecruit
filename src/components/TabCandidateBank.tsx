@@ -19,7 +19,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Candidate, CandidateStatus } from "../types";
-import { extractTextFromFile } from "../utils/fileExtractor";
+import { extractTextFromFile, fileToBase64 } from "../utils/fileExtractor";
 
 interface TabCandidateBankProps {
   candidates: Candidate[];
@@ -92,8 +92,19 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
     const tasks = fileArray.map((file) => ({
       name: file.name,
       taskFn: async () => {
-        const text = await extractTextFromFile(file);
-        return await parseAndAddCandidate(text, file.name);
+        let text = "";
+        let base64 = "";
+        try {
+          text = await extractTextFromFile(file);
+        } catch (e) {
+          console.warn("Client text extraction error:", e);
+        }
+        try {
+          base64 = await fileToBase64(file);
+        } catch (e) {
+          console.warn("Base64 conversion error:", e);
+        }
+        return await parseAndAddCandidate(text, file.name, base64, file.type);
       },
     }));
 
@@ -163,14 +174,21 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
     }
   };
 
-  const parseAndAddCandidate = async (text: string, sourceName: string): Promise<boolean> => {
+  const parseAndAddCandidate = async (
+    text: string,
+    sourceName: string,
+    fileBase64?: string,
+    mimeType?: string
+  ): Promise<boolean> => {
     try {
       const res = await fetch("/api/parse-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          resumeText: text.slice(0, 12000), // Cap input text to prevent oversized payloads
+          resumeText: (text || "").slice(0, 12000),
           filename: sourceName,
+          fileBase64: fileBase64 || "",
+          mimeType: mimeType || "",
         }),
       });
 
@@ -179,8 +197,8 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
 
       const newCand: Candidate = {
         id: "c_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
-        name: parsed.name || "Unknown Candidate",
-        title: parsed.title || "",
+        name: parsed.name || sourceName.replace(/\.[^/.]+$/, ""),
+        title: parsed.title || "IT Professional",
         email: parsed.email || "",
         phone: parsed.phone || "",
         skills: parsed.skills || [],
@@ -189,7 +207,7 @@ export const TabCandidateBank: React.FC<TabCandidateBankProps> = ({
         visa_status_stated: parsed.visa_status_stated || "",
         employment_type_stated: parsed.employment_type_stated || "",
         summary: parsed.summary || "",
-        resume_text: text.slice(0, 12000),
+        resume_text: text.trim() || parsed.summary || sourceName,
         source: sourceName,
         status: "New",
         notes: "",

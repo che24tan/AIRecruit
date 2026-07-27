@@ -47,7 +47,7 @@ function cleanAndParseJson(text: string) {
   }
 }
 
-async function generateGeminiContent(ai: GoogleGenAI, contents: string, config?: any) {
+async function generateGeminiContent(ai: GoogleGenAI, contents: any, config?: any) {
   const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash"];
   let lastErr: any = null;
 
@@ -156,7 +156,7 @@ function extractHeuristicsFromText(text: string, filename: string) {
   const email = emailMatch ? emailMatch[0] : "";
 
   // Phone
-  const phoneMatch = clean.match(/(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}/);
+  const phoneMatch = clean.match(/(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}/) || clean.match(/\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/);
   const phone = phoneMatch ? phoneMatch[0] : "";
 
   // Visa Status
@@ -167,6 +167,7 @@ function extractHeuristicsFromText(text: string, filename: string) {
   else if (/\b(opt|stem opt)\b/i.test(clean)) visa = "OPT";
   else if (/\b(ead|h4 ead|l2 ead)\b/i.test(clean)) visa = "EAD";
   else if (/\b(tn visa|tn)\b/i.test(clean)) visa = "TN Visa";
+  else if (/\b(cpt)\b/i.test(clean)) visa = "CPT";
 
   // Employment Type
   let empType = "";
@@ -174,23 +175,23 @@ function extractHeuristicsFromText(text: string, filename: string) {
   if (/\b(w2|w-2)\b/i.test(clean)) empType = empType ? "W2/C2C" : "W2";
   if (/\b(fte|full time|full-time)\b/i.test(clean)) empType = empType ? `${empType}/FTE` : "FTE";
 
-  // Location (e.g., Dallas, TX or San Jose, CA or New York, NY)
-  const locMatch = clean.match(/\b([A-Z][a-zA-A\s]{2,15},\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY))\b/i);
+  // Location (e.g. City, ST or major US tech hubs)
+  const locMatch = clean.match(/\b([A-Z][a-zA-B\s]{2,15},\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY))\b/i) || clean.match(/\b(Dallas|San Jose|New York|San Francisco|Austin|Chicago|Houston|Seattle|Boston|Atlanta|Denver|Los Angeles|Charlotte|Tampa|Miami|Phoenix|San Diego|Philadelphia|Raleigh|Columbus|Detroit|Indianapolis|Minneapolis|Salt Lake City)\b/i);
   const location = locMatch ? locMatch[0] : "";
 
   // Common Tech Skills Dictionary
   const commonSkills = [
-    "Java", "Spring Boot", "Python", "React", "Angular", "Node.js", "JavaScript", "TypeScript",
-    "C#", ".NET", "AWS", "Azure", "GCP", "SQL", "PostgreSQL", "Oracle", "MongoDB", "Kubernetes",
-    "Docker", "Microservices", "Kafka", "Spark", "Hadoop", "DevOps", "Terraform", "Jenkins",
-    "REST API", "GraphQL", "Snowflake", "Databricks", "Tableau", "Power BI", "Salesforce",
-    "MuleSoft", "Golang", "Scala", "C++", "Linux", "CI/CD", "Agile", "Scrum", "Selenium"
+    "Java", "Spring Boot", "Spring", "Microservices", "Python", "Django", "React", "Angular", "Vue", "Node.js",
+    "JavaScript", "TypeScript", "C#", ".NET", "AWS", "Azure", "GCP", "SQL", "PostgreSQL", "MySQL", "Oracle",
+    "MongoDB", "Kubernetes", "Docker", "Kafka", "Spark", "Hadoop", "DevOps", "Terraform", "Jenkins",
+    "REST API", "GraphQL", "Snowflake", "Databricks", "Tableau", "Power BI", "Salesforce", "MuleSoft",
+    "Golang", "Scala", "C++", "Linux", "CI/CD", "Agile", "Scrum", "Selenium", "Cypress", "JIRA", "J2EE"
   ];
-  const detectedSkills = commonSkills.filter((s) => new RegExp(`\\b${s.replace(".", "\\.")}\\b`, "i").test(clean));
+  const detectedSkills = commonSkills.filter((s) => new RegExp(`\\b${s.replace(".", "\\.").replace("+", "\\+")}\\b`, "i").test(clean));
 
   // Job Title extraction heuristics
   let title = "";
-  const titleRegex = /(Senior|Lead|Principal|Junior|Staff)?\s*(Java|Python|Full Stack|React|Frontend|Backend|Software|Data|DevOps|Cloud|QA|Automation|\.Net|Dotnet|Systems|Solution|Project|Product|AWS|Salesforce|SAP|MuleSoft|Database)\s*(Developer|Engineer|Architect|Lead|Manager|Consultant|Analyst|Admin|Administrator)/i;
+  const titleRegex = /(Senior|Sr\.?|Lead|Principal|Junior|Jr\.?|Staff)?\s*(Java|J2EE|Python|Full\s*Stack|React|Angular|Node|Frontend|Backend|Software|Data|Database|DevOps|Cloud|QA|Test|Automation|\.Net|Dotnet|C#|C\+\+|Go|Golang|Scala|SAP|Salesforce|AWS|Azure|GCP|Network|Security|Infrastructure|Systems|System|Solution|Enterprise|Project|Product|Scrum|Agile|Business|ETL|BI|Big\s*Data|MuleSoft)?\s*(Developer|Engineer|Architect|Lead|Manager|Consultant|Analyst|Admin|Administrator|Specialist|Tester|Master|Designer|Scientist|DBA)/i;
   const titleMatch = clean.match(titleRegex);
   if (titleMatch) {
     title = titleMatch[0];
@@ -211,10 +212,10 @@ function extractHeuristicsFromText(text: string, filename: string) {
   return { name, title, email, phone, location, visa, empType, skills: detectedSkills };
 }
 
-// 3. Parse Resume Text into Structured Candidate Record
+// 3. Parse Resume Text or Document into Structured Candidate Record
 app.post("/api/parse-resume", async (req, res) => {
   try {
-    const { resumeText, filename } = req.body;
+    const { resumeText, filename, fileBase64, mimeType } = req.body;
     const cleanText = (resumeText || "").toString().replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ").trim();
     const fallbackName = (filename || "Candidate")
       .replace(/\.[^/.]+$/, "")
@@ -223,42 +224,63 @@ app.post("/api/parse-resume", async (req, res) => {
 
     const heuristics = extractHeuristicsFromText(cleanText, filename || "");
 
-    if (!cleanText || cleanText.length < 15) {
-      return res.json({
-        name: heuristics.name || fallbackName,
-        title: heuristics.title || "IT Professional",
-        email: heuristics.email || "",
-        phone: heuristics.phone || "",
-        skills: heuristics.skills.length > 0 ? heuristics.skills : ["Resume Uploaded"],
-        years_experience: "",
-        location: heuristics.location || "",
-        visa_status_stated: heuristics.visa || "",
-        employment_type_stated: heuristics.empType || "",
-        summary: `Document uploaded (${filename || "file"}). Text extraction limited.`,
-      });
-    }
-
     try {
       const ai = getGeminiClient();
-      const prompt = `Extract structured recruiting data from this resume text.
+      const promptText = `Extract structured recruiting data from this candidate resume.
 Rules:
-- name: Candidate's full name
-- title: candidate's current or most recent job title (e.g. "Senior Java Developer", "Data Engineer")
-- email: email address
-- phone: phone number
-- skills: array of top 5-10 technical skills mentioned
-- location: City, State or Location if mentioned
-- visa_status_stated: visa/work authorization claimed on resume (e.g. "H1B", "Green Card", "US Citizen", "OPT", "TN", "EAD") or "" if unstated
-- employment_type_stated: preferred arrangement e.g. "C2C", "W2", "FTE", or ""
-- years_experience: total years experience estimate
-- summary: one concise sentence summarizing core expertise
+- name: Candidate's full name (e.g. "Jane Smith")
+- title: Candidate's primary/current job title (e.g. "Senior Java Developer", "Cloud Architect")
+- email: Candidate's email address (e.g. "jane.smith@gmail.com")
+- phone: Candidate's phone number
+- skills: array of top 6-12 technical skills (e.g. ["Java", "Spring Boot", "AWS", "Microservices", "Docker"])
+- location: City, State or Location (e.g. "Dallas, TX" or "San Jose, CA")
+- visa_status_stated: Visa / work authorization claimed on resume (e.g. "H1B", "Green Card", "US Citizen", "OPT", "TN", "EAD") or "" if unstated
+- employment_type_stated: Employment type mentioned, e.g. "C2C", "W2", "FTE", or ""
+- years_experience: Estimated total years of experience
+- summary: One concise sentence summarizing their core background and experience
 
-Filename reference: ${filename || "pasted"}
+Filename reference: ${filename || "pasted"}`;
 
-RESUME TEXT:
-${cleanText.slice(0, 8000)}`;
+      const contents: any[] = [];
 
-      const response = await generateGeminiContent(ai, prompt, {
+      // Multimodal document support for Gemini
+      if (fileBase64 && typeof fileBase64 === "string" && fileBase64.length > 50) {
+        let effectiveMime = mimeType || "application/pdf";
+        if (filename?.toLowerCase().endsWith(".pdf")) effectiveMime = "application/pdf";
+        else if (filename?.toLowerCase().endsWith(".png")) effectiveMime = "image/png";
+        else if (filename?.toLowerCase().endsWith(".jpg") || filename?.toLowerCase().endsWith(".jpeg")) effectiveMime = "image/jpeg";
+
+        if (effectiveMime === "application/pdf" || effectiveMime.startsWith("image/")) {
+          contents.push({
+            inlineData: {
+              data: fileBase64,
+              mimeType: effectiveMime,
+            },
+          });
+        }
+      }
+
+      if (cleanText.length > 0) {
+        contents.push(`RESUME TEXT CONTENT:\n${cleanText.slice(0, 10000)}`);
+      } else if (contents.length === 0) {
+        // If neither text nor document binary could be sent
+        return res.json({
+          name: heuristics.name || fallbackName,
+          title: heuristics.title || "IT Professional",
+          email: heuristics.email || "",
+          phone: heuristics.phone || "",
+          skills: heuristics.skills.length > 0 ? heuristics.skills : ["General IT"],
+          years_experience: "",
+          location: heuristics.location || "",
+          visa_status_stated: heuristics.visa || "",
+          employment_type_stated: heuristics.empType || "",
+          summary: `Document file uploaded (${filename || "file"}).`,
+        });
+      }
+
+      contents.push(promptText);
+
+      const response = await generateGeminiContent(ai, contents, {
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,

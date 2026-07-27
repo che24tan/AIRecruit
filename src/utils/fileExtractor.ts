@@ -1,9 +1,24 @@
 import mammoth from "mammoth";
 import * as pdfjsLib from "pdfjs-dist";
 
-// Set worker path for pdfjs with robust CDN fallbacks
-const version = pdfjsLib.version || "3.11.174";
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${version}/pdf.worker.min.js`;
+// Set worker path for pdfjs with robust CDN fallbacks matching version
+const version = pdfjsLib.version || "4.0.379";
+if (typeof window !== "undefined") {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
+}
+
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.includes(",") ? result.split(",")[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = (error) => reject(error);
+    reader.readAsDataURL(file);
+  });
+}
 
 function extractPdfTextFallback(arrayBuffer: ArrayBuffer): string {
   try {
